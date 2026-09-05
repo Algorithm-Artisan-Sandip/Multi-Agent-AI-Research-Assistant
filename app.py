@@ -3,7 +3,6 @@ import html
 import streamlit as st
 
 from config import groq_api_key, set_runtime_keys, tavily_api_key
-from pipeline import run_research_pipeline
 
 st.set_page_config(
     page_title="Multi-Agent AI Research Assistant",
@@ -15,8 +14,7 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
-html, body, [class*="css"]{ font-family:'Poppins',sans-serif; }
+html, body, [class*="css"]{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
 .stApp{
     background:
         radial-gradient(circle at top left,#22254b 0%,#0E1117 35%),
@@ -56,7 +54,7 @@ if "result" not in st.session_state:
     st.session_state.result = None
 
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/4712/4712109.png", width=120)
+    st.markdown("## 🤖")
     st.title("AI Research Assistant")
     st.markdown("---")
     st.markdown("## ⚙️ Workflow")
@@ -84,7 +82,7 @@ with st.sidebar:
         st.info("Groq on · search will use DuckDuckGo/Wikipedia")
     else:
         st.warning("No Groq key · extractive report from live sources still runs")
-    st.caption("Powered by LangGraph multi-agent orchestration")
+    st.caption("Powered by multi-agent orchestration")
 
 st.markdown('<div class="main-title">🤖 Multi-Agent AI Research Assistant</div>', unsafe_allow_html=True)
 st.markdown(
@@ -118,6 +116,8 @@ if run:
             status.info(message)
 
         with st.spinner("Running Planner → Search → Reader → Writer → Critic..."):
+            from pipeline import run_research_pipeline
+
             result = run_research_pipeline(topic.strip(), progress=on_progress)
         st.session_state.result = result
         last = result
@@ -199,7 +199,7 @@ st.markdown("---")
 st.markdown(
     """
 <div style="text-align:center;color:#AAB3C5;">
-Built with <b>LangGraph</b> multi-agent orchestration · Groq · Tavily · DuckDuckGo · Wikipedia · Streamlit
+Built with <b>multi-agent orchestration</b> · Groq · Tavily · DuckDuckGo · Wikipedia · Streamlit
 </div>
 """,
     unsafe_allow_html=True,

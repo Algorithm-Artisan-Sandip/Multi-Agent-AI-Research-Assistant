@@ -1,3 +1,3 @@
-"""Streamlit Community Cloud entrypoint. Keep this file as the Main file path."""
+"""Streamlit Community Cloud entrypoint — loads UI only; pipeline imports on first run."""
 
-import app as _app  # noqa: F401
+import app  # noqa: F401

@@ -1,6 +1,6 @@
 # Multi-Agent AI Research Assistant
 
-Streamlit + LangGraph research app. It boots on Streamlit Community Cloud **without** API keys, then optionally uses Groq and Tavily when they are provided as secrets.
+Streamlit multi-agent research app. It boots quickly on Streamlit Community Cloud **without** API keys, then optionally uses Groq and Tavily from secrets.
 
 Live app: https://multi-agent-ai-research-assistant-v1.streamlit.app/
 
@@ -8,19 +8,22 @@ Live app: https://multi-agent-ai-research-assistant-v1.streamlit.app/
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run streamlit_app.py
 ```
 
-## Streamlit Cloud
+## Streamlit Cloud settings
 
-1. App settings → the GitHub repo `Algorithm-Artisan-Sandip/Multi-Agent-AI-Research-Assistant`
-2. Branch: **`main`**
-3. Main file: **`streamlit_app.py`** (or `app.py`)
-4. Optional secrets (App settings → Secrets):
+| Setting | Value |
+|---------|--------|
+| Branch | `main` |
+| Main file | `streamlit_app.py` |
+| Sharing | **Public** (required or visitors see a login wall) |
+
+Optional secrets:
 
 ```toml
 GROQ_API_KEY = "your_groq_key"
 TAVILY_API_KEY = "your_tavily_key"
 ```
 
-Without secrets the Planner still asks questions, Search uses DuckDuckGo + Wikipedia, and Writer returns sourced extractive answers. The old `main` branch crashed on import when `.env` keys were missing; that is why the Cloud app failed to go live.
+Heavy agent code loads only when you click **Generate Research Report**, so cold starts stay fast.
