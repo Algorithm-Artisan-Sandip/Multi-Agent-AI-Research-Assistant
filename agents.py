@@ -19,10 +19,19 @@ from tools import (
 
 def default_questions(topic: str) -> list[str]:
     topic = topic.strip()
+    if topic.endswith("?"):
+        core = topic.rstrip("?").strip()
+        return [
+            topic if topic.endswith("?") else f"{core}?",
+            f"What is the current evidence and state of the art for {core}?",
+            f"What challenges, risks, or limitations relate to {core}?",
+            f"What is the likely outlook for {core} over the next 5–10 years?",
+            f"Which organizations, papers, or products matter most for {core}?",
+        ]
     return [
-        f"What is {topic} and why does it matter?",
+        f"Give a clear overview of {topic} and why it matters.",
         f"What is the current state of {topic}?",
-        f"What are the main challenges, risks, or limitations of {topic}?",
+        f"What are the main challenges, risks, or limitations around {topic}?",
         f"What is the likely future of {topic} over the next 5–10 years?",
         f"Which organizations, papers, or products are most important for {topic}?",
     ]
