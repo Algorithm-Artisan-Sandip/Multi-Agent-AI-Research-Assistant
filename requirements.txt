@@ -16,6 +16,7 @@ streamlit>=1.46.0
 
 # Web Search
 tavily-python>=0.7.11
+ddgs>=9.0.0
 
 
 # Web Scraping
