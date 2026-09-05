@@ -97,6 +97,64 @@ def _tavily_search(query: str, max_results: int) -> list[SearchHit]:
     return hits
 
 
+def _parse_html(markup: str):
+    try:
+        return BeautifulSoup(markup, "lxml")
+    except Exception:
+        return BeautifulSoup(markup, "html.parser")
+
+
+def _ddg_instant(query: str) -> list[SearchHit]:
+    response = _session().get(
+        "https://api.duckduckgo.com/",
+        params={
+            "q": query,
+            "format": "json",
+            "no_redirect": 1,
+            "no_html": 1,
+            "skip_disambig": 1,
+        },
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    data = response.json()
+    hits: list[SearchHit] = []
+
+    abstract_url = data.get("AbstractURL") or ""
+    abstract = _clean_text(data.get("AbstractText") or "")
+    if _valid_http_url(abstract_url) and abstract:
+        hits.append(
+            SearchHit(
+                title=data.get("Heading") or query,
+                url=abstract_url,
+                snippet=abstract[:MAX_SNIPPET_CHARS],
+                source="duckduckgo-instant",
+                query=query,
+                raw_content=abstract[:MAX_SCRAPE_CHARS],
+            )
+        )
+
+    def _consume(topic: dict) -> None:
+        url = topic.get("FirstURL") or ""
+        text = _clean_text(topic.get("Text") or "")
+        if _valid_http_url(url) and text:
+            hits.append(
+                SearchHit(
+                    title=text.split(" - ", 1)[0][:120],
+                    url=url,
+                    snippet=text[:MAX_SNIPPET_CHARS],
+                    source="duckduckgo-instant",
+                    query=query,
+                )
+            )
+        for nested in topic.get("Topics") or []:
+            _consume(nested)
+
+    for topic in data.get("RelatedTopics") or []:
+        _consume(topic)
+    return hits
+
+
 def _ddg_search(query: str, max_results: int) -> list[SearchHit]:
     from ddgs import DDGS
 
@@ -191,12 +249,18 @@ def web_search(query: str, max_results: int = 5) -> list[SearchHit]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"duckduckgo: {exc}")
 
-    if len(hits) < 2:
+    if len(hits) < max_results:
         try:
-            wiki_hits = wikipedia_search(query, max_results=3)
-            hits.extend(_dedupe(hits + wiki_hits)[len(hits) :])
-        except Exception as extra:  # noqa: BLE001
-            errors.append(f"wikipedia: {extra}")
+            hits.extend(_dedupe(hits + _ddg_instant(query))[len(hits) :])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"duckduckgo-instant: {exc}")
+
+    # Always include Wikipedia so Streamlit Cloud still has sources if DDG is blocked.
+    try:
+        wiki_hits = wikipedia_search(query, max_results=max(3, max_results))
+        hits.extend(_dedupe(hits + wiki_hits)[len(hits) :])
+    except Exception as extra:  # noqa: BLE001
+        errors.append(f"wikipedia: {extra}")
 
     if not hits and errors:
         raise RuntimeError("All search providers failed: " + "; ".join(errors))
@@ -227,7 +291,7 @@ def scrape_url(url: str) -> ScrapedPage:
         if "pdf" in content_type or url.lower().endswith(".pdf"):
             return ScrapedPage(url=url, title="", text="", ok=False, error="PDF skipped")
 
-        soup = BeautifulSoup(response.text, "lxml")
+        soup = _parse_html(response.text)
         title = _clean_text(soup.title.get_text() if soup.title else url)
         for tag in soup(["script", "style", "header", "footer", "nav", "aside", "noscript", "form"]):
             tag.decompose()

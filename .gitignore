@@ -5,3 +5,4 @@ __pycache__/
 .vscode/
 .idea/
 *_report.txt
+.streamlit/secrets.toml

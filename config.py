@@ -23,12 +23,31 @@ GROQ_MODEL_CANDIDATES = [
 ]
 
 
+def _from_streamlit_secrets(name: str) -> str:
+    try:
+        import streamlit as st
+
+        secrets = st.secrets
+        if name in secrets:
+            return str(secrets[name]).strip()
+        nested = secrets.get("general") if hasattr(secrets, "get") else None
+        if isinstance(nested, dict) and name in nested:
+            return str(nested[name]).strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _lookup(name: str) -> str:
+    return (os.getenv(name) or "").strip() or _from_streamlit_secrets(name)
+
+
 def groq_api_key() -> str:
-    return (os.getenv("GROQ_API_KEY") or "").strip()
+    return _lookup("GROQ_API_KEY")
 
 
 def tavily_api_key() -> str:
-    return (os.getenv("TAVILY_API_KEY") or "").strip()
+    return _lookup("TAVILY_API_KEY")
 
 
 def set_runtime_keys(*, groq: str | None = None, tavily: str | None = None) -> None:
