@@ -46,6 +46,19 @@ section[data-testid="stSidebar"] {
 }
 .badge.ok { color:#86efac; border-color: rgba(134,239,172,0.35); }
 .badge.dim { color:#cbd5e1; }
+.flow-wrap { margin-top: 8px; }
+.flow-node {
+  margin: 0 auto 6px; padding: 10px 12px; max-width: 220px;
+  border-radius: 12px; text-align: center; font-size: 0.82rem; font-weight: 600;
+  border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05);
+}
+.flow-node.planner { border-color: rgba(91,141,239,0.45); }
+.flow-node.search { border-color: rgba(56,189,248,0.45); }
+.flow-node.reader { border-color: rgba(52,211,153,0.45); }
+.flow-node.writer { border-color: rgba(167,139,250,0.45); }
+.flow-node.critic { border-color: rgba(251,191,36,0.45); }
+.flow-arrow { text-align:center; color:#94a3b8; font-size: 0.9rem; line-height: 1; margin: 2px 0; }
+.flow-note { font-size: 0.72rem; color: #94a3b8; text-align: center; margin-top: 8px; }
 div.stButton > button {
   height: 52px; border-radius: 14px; border: none; font-weight: 600;
   background: linear-gradient(90deg, #5B8DEF, #8B5CF6);
@@ -63,6 +76,31 @@ div.stButton > button {
 
 if "result" not in st.session_state:
     st.session_state.result = None
+if "research_topic" not in st.session_state:
+    st.session_state.research_topic = ""
+
+
+def run_research_job(topic: str, *, fast: bool) -> None:
+    progress = st.progress(0)
+    status_box = st.empty()
+
+    def on_progress(pct: int, message: str) -> None:
+        progress.progress(min(max(pct, 0), 100))
+        status_box.info(message)
+
+    with st.spinner("Agents running…"):
+        from pipeline import run_research_pipeline
+
+        result = run_research_pipeline(topic, progress=on_progress, fast_mode=fast)
+    result["topic"] = topic
+    st.session_state.result = result
+    if result.get("status") == "completed":
+        status_box.success("Research complete. Explore the structured tabs below.")
+    else:
+        status_box.error("Research could not be completed.")
+        for err in result.get("errors") or []:
+            st.error(err)
+
 
 status = integration_status()
 
@@ -71,6 +109,25 @@ with st.sidebar:
     st.markdown("Multi-agent pipeline with parallel search, reader, writer, and critic.")
     fast_mode = st.toggle("⚡ Fast mode", value=True, help="Recommended for speed.")
     deep_review = st.toggle("🧠 Deep LLM synthesis", value=False, disabled=fast_mode)
+    st.markdown("---")
+    st.markdown("**Agent orchestration**")
+    st.markdown(
+        """
+<div class="flow-wrap">
+  <div class="flow-node planner">🧭 Planner Agent<br><span style="font-weight:400">Research questions</span></div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-node search">🔍 Search Agent<br><span style="font-weight:400">Tavily · DDG · Wiki</span></div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-node reader">🌐 Reader Agent<br><span style="font-weight:400">Scrape + media</span></div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-node writer">📝 Writer Agent<br><span style="font-weight:400">Q&A + report</span></div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-node critic">⭐ Critic Agent<br><span style="font-weight:400">Quality review</span></div>
+  <div class="flow-note">Sequential graph · fail-fast on empty sources</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
     st.markdown("**Integrations**")
     groq_badge = "ok" if status["groq"] else "dim"
@@ -104,49 +161,29 @@ examples = [
     "Global semiconductor supply chain 2026",
     "CRISPR therapy clinical trials",
 ]
-st.caption("Try an example topic")
+st.caption("Try an example topic (fills the field and starts research)")
 ex_cols = st.columns(len(examples))
-example_choice = None
-for col, ex in zip(ex_cols, examples):
-    if col.button(ex, use_container_width=True):
-        example_choice = ex
+for idx, (col, ex) in enumerate(zip(ex_cols, examples)):
+    if col.button(ex, use_container_width=True, key=f"example_topic_{idx}"):
+        st.session_state.research_topic = ex
+        st.session_state.auto_run_research = True
 
-topic = st.text_input(
+st.text_input(
     "Research topic",
-    value=example_choice or "",
+    key="research_topic",
     placeholder="Any research question or topic — politics, science, markets, history…",
 )
 
 run = st.button("Generate research report", type="primary", use_container_width=True)
 
-if run:
-    if not topic.strip():
+should_run = run or st.session_state.pop("auto_run_research", False)
+if should_run:
+    topic_value = (st.session_state.research_topic or "").strip()
+    if not topic_value:
         st.warning("Enter a research topic.")
     else:
-        progress = st.progress(0)
-        status_box = st.empty()
-
-        def on_progress(pct: int, message: str) -> None:
-            progress.progress(min(max(pct, 0), 100))
-            status_box.info(message)
-
-        with st.spinner("Agents running…"):
-            from pipeline import run_research_pipeline
-
-            result = run_research_pipeline(
-                topic.strip(),
-                progress=on_progress,
-                fast_mode=fast_mode and not deep_review,
-            )
-        result["topic"] = topic.strip()
-        st.session_state.result = result
-        last = result
-        if result.get("status") == "completed":
-            status_box.success("Research complete. Explore the structured tabs below.")
-        else:
-            status_box.error("Research could not be completed.")
-            for err in result.get("errors") or []:
-                st.error(err)
+        run_research_job(topic_value, fast=fast_mode and not deep_review)
+        last = st.session_state.result
 
 last = st.session_state.result
 if last and last.get("status") == "completed":
