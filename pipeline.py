@@ -1,11 +1,12 @@
-"""Multi-agent research pipeline (sequential orchestration for fast Streamlit boot)."""
+"""Multi-agent research pipeline orchestrated with LangGraph."""
 
 from __future__ import annotations
 
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, Literal, TypedDict
 
 from agents import (
     answer_questions,
+    build_executive_summary,
     critique_report,
     plan_questions,
     read_sources,
@@ -14,9 +15,9 @@ from agents import (
     write_report,
 )
 from config import groq_api_key, tavily_api_key
+from llm import ResearchLLM
 from media_assets import collect_media_items
 from text_clean import sanitize_report_markdown
-from llm import ResearchLLM
 from tools import SearchHit, ScrapedPage, format_hits, format_pages
 
 
@@ -159,9 +160,7 @@ def _writer(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
     else:
         from agents import _extractive_report, _references
 
-        report = _extractive_report(
-            state["topic"], answers, _references(hits, pages)
-        )
+        report = _extractive_report(state["topic"], answers, _references(hits, pages))
     used_llm_synthesis = bool(answers_llm or report_llm)
     if not (report or "").strip():
         errors = list(state.get("errors") or [])
@@ -170,8 +169,6 @@ def _writer(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
             state,
             {"answers": answers, "report": "", "errors": errors, "logs": logs, "status": "failed"},
         )
-    from agents import build_executive_summary
-
     summary = build_executive_summary(state["topic"], answers)
     media = state.get("media") or []
     if media:
@@ -219,6 +216,31 @@ def _critic(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
     return _merge(state, {"feedback": feedback, "logs": logs, "status": "completed", "model": llm.model_name})
 
 
+def build_langgraph_app(llm: ResearchLLM, progress: ProgressCb | None = None):
+    """Compile the LangGraph workflow (import deferred for fast Streamlit boot)."""
+    from langgraph.graph import END, START, StateGraph
+
+    def route(state: ResearchState) -> Literal["continue", "end"]:
+        if state.get("status") == "failed":
+            return "end"
+        return "continue"
+
+    graph = StateGraph(ResearchState)
+    graph.add_node("planner", lambda state: _planner(state, llm, progress))
+    graph.add_node("searcher", lambda state: _searcher(state, progress))
+    graph.add_node("reader", lambda state: _reader(state, progress))
+    graph.add_node("writer", lambda state: _writer(state, llm, progress))
+    graph.add_node("critic", lambda state: _critic(state, llm, progress))
+
+    graph.add_edge(START, "planner")
+    graph.add_edge("planner", "searcher")
+    graph.add_conditional_edges("searcher", route, {"continue": "reader", "end": END})
+    graph.add_conditional_edges("reader", route, {"continue": "writer", "end": END})
+    graph.add_conditional_edges("writer", route, {"continue": "critic", "end": END})
+    graph.add_edge("critic", END)
+    return graph.compile()
+
+
 def run_research_pipeline(
     topic: str,
     progress: ProgressCb | None = None,
@@ -235,10 +257,10 @@ def run_research_pipeline(
         }
 
     print("\n" + "=" * 70)
-    print("RESEARCH PIPELINE STARTED")
+    print("RESEARCH PIPELINE STARTED (LangGraph)")
     print("=" * 70)
 
-    state: ResearchState = {
+    initial: ResearchState = {
         "topic": topic,
         "logs": [],
         "errors": [],
@@ -254,20 +276,11 @@ def run_research_pipeline(
 
     try:
         llm = ResearchLLM()
-        for step in (
-            lambda s: _planner(s, llm, progress),
-            lambda s: _searcher(s, progress),
-            lambda s: _reader(s, progress),
-            lambda s: _writer(s, llm, progress),
-            lambda s: _critic(s, llm, progress),
-        ):
-            state = step(state)
-            if state.get("status") == "failed":
-                break
+        app = build_langgraph_app(llm, progress=progress)
+        state = app.invoke(initial)
     except Exception as exc:  # noqa: BLE001
         print("Pipeline failed:", exc)
-        state["status"] = "failed"
-        state.setdefault("errors", []).append(str(exc))
+        state = {**initial, "status": "failed", "errors": [str(exc)]}
 
     if state.get("status") != "failed":
         if not state.get("report"):

@@ -106,7 +106,7 @@ status = integration_status()
 
 with st.sidebar:
     st.markdown("### 🛰️ Research Control")
-    st.markdown("Multi-agent pipeline with parallel search, reader, writer, and critic.")
+    st.markdown("LangGraph multi-agent pipeline with parallel search, reader, writer, and critic.")
     fast_mode = st.toggle("⚡ Fast mode", value=True, help="Recommended for speed.")
     deep_review = st.toggle("🧠 Deep LLM synthesis", value=False, disabled=fast_mode)
     st.markdown("---")
@@ -123,7 +123,7 @@ with st.sidebar:
   <div class="flow-node writer">📝 Writer Agent<br><span style="font-weight:400">Q&A + report</span></div>
   <div class="flow-arrow">↓</div>
   <div class="flow-node critic">⭐ Critic Agent<br><span style="font-weight:400">Quality review</span></div>
-  <div class="flow-note">Sequential graph · fail-fast on empty sources</div>
+  <div class="flow-note">LangGraph state machine · fail-fast on empty sources</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -308,4 +308,4 @@ if last and last.get("status") == "completed":
         for line in last.get("logs") or []:
             st.write(f"- {line}")
 
-st.caption("Research assistant · Groq · Tavily · DuckDuckGo · Wikipedia")
+st.caption("LangGraph · LangChain · Groq · Tavily · DuckDuckGo · Wikipedia")

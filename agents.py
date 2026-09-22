@@ -1,4 +1,4 @@
-"""Specialized research agents. Each agent owns one job in the LangGraph workflow."""
+"""Specialized research agents. Each agent is a node in the LangGraph workflow."""
 
 from __future__ import annotations
 

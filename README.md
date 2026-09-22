@@ -1,6 +1,6 @@
 # Multi-Agent AI Research Assistant
 
-Streamlit multi-agent research app. It boots quickly on Streamlit Community Cloud **without** API keys, then optionally uses Groq and Tavily from secrets.
+Streamlit multi-agent research app orchestrated with **LangGraph** (Planner → Search → Reader → Writer → Critic). It boots quickly on Streamlit Community Cloud **without** API keys, then optionally uses Groq and Tavily from secrets.
 
 Live app: https://multi-agent-ai-research-assistant-v1.streamlit.app/
 
