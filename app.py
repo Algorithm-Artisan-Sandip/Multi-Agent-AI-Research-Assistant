@@ -1,5 +1,6 @@
 import html
 import json
+import re
 
 import streamlit as st
 
@@ -71,7 +72,7 @@ with st.sidebar:
     fast_mode = st.toggle("⚡ Fast mode", value=True, help="Recommended for speed.")
     deep_review = st.toggle("🧠 Deep LLM synthesis", value=False, disabled=fast_mode)
     st.markdown("---")
-    st.markdown("**Integrations (from server secrets)**")
+    st.markdown("**Integrations**")
     groq_badge = "ok" if status["groq"] else "dim"
     tavily_badge = "ok" if status["tavily"] else "dim"
     st.markdown(
@@ -79,7 +80,6 @@ with st.sidebar:
         f'<span class="badge {tavily_badge}">Tavily: {"connected" if status["tavily"] else "open web"}</span>',
         unsafe_allow_html=True,
     )
-    st.caption("API keys are not shown in the UI. Configure them in Streamlit Cloud → Secrets.")
 
 st.markdown(
     """
@@ -226,20 +226,26 @@ if last and last.get("status") == "completed":
         else:
             images = [m for m in media if m.get("type") == "image"]
             videos = [m for m in media if m.get("type") == "video"]
+            st.caption(f"{len(images)} images · {len(videos)} videos/embeds")
             if images:
                 st.markdown("**Images**")
                 cols = st.columns(3)
-                for idx, item in enumerate(images[:9]):
+                for idx, item in enumerate(images[:18]):
                     with cols[idx % 3]:
                         st.caption(item.get("title") or "Image")
-                        try:
-                            st.image(item["url"], use_container_width=True)
-                        except Exception:
-                            st.link_button("Open image", item["url"], use_container_width=True)
+                        st.image(item["url"], use_container_width=True)
+                        st.link_button("Open", item["url"], use_container_width=True, key=f"img_{idx}")
             if videos:
-                st.markdown("**Videos & embeds**")
-                for item in videos:
-                    st.link_button(item.get("title") or "Video", item["url"], use_container_width=True)
+                st.markdown("**Videos**")
+                for idx, item in enumerate(videos[:12]):
+                    title = item.get("title") or "Video"
+                    url = item["url"]
+                    st.markdown(f"**{title}**")
+                    if "youtube.com" in url or "youtu.be" in url:
+                        st.video(url)
+                    else:
+                        st.link_button("Open video", url, use_container_width=True, key=f"vid_{idx}")
+                    st.divider()
 
     with tabs[4]:
         for hit in hits[:25]:
@@ -254,6 +260,9 @@ if last and last.get("status") == "completed":
 
     with tabs[5]:
         if feedback:
+            score_match = re.search(r"(\d+(?:\.\d+)?)/10", feedback)
+            if score_match:
+                st.metric("Quality score", f"{score_match.group(1)}/10")
             st.markdown(feedback)
         else:
             st.info("No review available.")
@@ -262,4 +271,4 @@ if last and last.get("status") == "completed":
         for line in last.get("logs") or []:
             st.write(f"- {line}")
 
-st.caption("Research assistant · keys via Streamlit Secrets only · Groq · Tavily · DuckDuckGo · Wikipedia")
+st.caption("Research assistant · Groq · Tavily · DuckDuckGo · Wikipedia")

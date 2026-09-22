@@ -8,11 +8,12 @@ from agents import (
     answer_questions,
     critique_report,
     plan_questions,
-    quick_critique,
     read_sources,
     search_for_questions,
+    structured_critique,
     write_report,
 )
+from config import groq_api_key, tavily_api_key
 from media_assets import collect_media_items
 from text_clean import sanitize_report_markdown
 from llm import ResearchLLM
@@ -37,10 +38,12 @@ class ResearchState(TypedDict, total=False):
     search_provider: str
     model: str
     used_llm: bool
+    used_llm_synthesis: bool
     status: str
     fast_mode: bool
     media: list[dict[str, Any]]
     executive_summary: str
+    llm_error: str
 
 
 def _log(state: ResearchState, message: str) -> list[str]:
@@ -128,7 +131,7 @@ def _reader(state: ResearchState, progress: ProgressCb | None) -> ResearchState:
             },
         )
     page_dicts = [page.to_dict() for page in pages]
-    media = collect_media_items(page_dicts, state.get("search_hits") or [])
+    media = collect_media_items(page_dicts, state.get("search_hits") or [], state.get("topic") or "")
     logs = _log({**state, "logs": logs}, f"Reader Agent: {len(media)} media assets")
     return _merge(
         state,
@@ -147,17 +150,19 @@ def _writer(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
     pages = [ScrapedPage(**item) for item in state.get("scraped_pages") or []]
     questions = state.get("questions") or []
     use_llm = not state.get("fast_mode", True)
-    answers = answer_questions(
+    answers, answers_llm = answer_questions(
         state["topic"], questions, hits, pages, llm, use_llm=use_llm
     )
+    report_llm = False
     if use_llm:
-        report = write_report(state["topic"], questions, answers, hits, pages, llm)
+        report, report_llm = write_report(state["topic"], questions, answers, hits, pages, llm)
     else:
         from agents import _extractive_report, _references
 
         report = _extractive_report(
             state["topic"], answers, _references(hits, pages)
         )
+    used_llm_synthesis = bool(answers_llm or report_llm)
     if not (report or "").strip():
         errors = list(state.get("errors") or [])
         errors.append("Writer Agent produced an empty report.")
@@ -176,18 +181,38 @@ def _writer(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
     logs = _log({**state, "logs": logs}, f"Writer Agent: answered {len(answers)} questions")
     return _merge(
         state,
-        {"answers": answers, "report": report, "executive_summary": summary, "logs": logs},
+        {
+            "answers": answers,
+            "report": report,
+            "executive_summary": summary,
+            "used_llm_synthesis": used_llm_synthesis,
+            "llm_error": llm.error,
+            "logs": logs,
+        },
     )
 
 
 def _critic(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None) -> ResearchState:
     logs = _emit(progress, 90, "Critic Agent: reviewing the report", state)
     hits = [SearchHit(**item) for item in state.get("search_hits") or []]
-    if state.get("fast_mode", True):
-        feedback = quick_critique(state["topic"], state.get("answers") or [], hits)
-    else:
+    pages = [ScrapedPage(**item) for item in state.get("scraped_pages") or []]
+    feedback = ""
+    if not state.get("fast_mode", True) and llm.available:
         feedback = critique_report(
             state["topic"], state.get("report") or "", state.get("answers") or [], llm
+        )
+    if not feedback:
+        feedback = structured_critique(
+            state["topic"],
+            state.get("answers") or [],
+            hits,
+            pages,
+            state.get("media") or [],
+            fast_mode=bool(state.get("fast_mode", True)),
+            used_llm_synthesis=bool(state.get("used_llm_synthesis")),
+            groq_configured=bool(groq_api_key()),
+            tavily_configured=bool(tavily_api_key()),
+            llm_error=state.get("llm_error") or llm.error,
         )
     logs = _log({**state, "logs": logs}, "Critic Agent: review complete")
     _emit(progress, 100, "Pipeline complete", {**state, "logs": logs})
@@ -223,6 +248,8 @@ def run_research_pipeline(
         "scraped_content": "No scraped content available.",
         "media": [],
         "executive_summary": "",
+        "used_llm_synthesis": False,
+        "llm_error": "",
     }
 
     try:

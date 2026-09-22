@@ -28,30 +28,75 @@ from tools import (
 )
 
 
+def _token_set(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]{3,}", (text or "").lower())}
+
+
+def dedupe_questions(topic: str, questions: list[str]) -> list[str]:
+    topic_tokens = _token_set(topic)
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for question in questions:
+        q = question.strip()
+        if not q:
+            continue
+        key = q.lower()
+        if key in seen:
+            continue
+        q_tokens = _token_set(q)
+        if topic_tokens and q_tokens:
+            overlap = len(topic_tokens & q_tokens) / max(len(topic_tokens), 1)
+            if overlap > 0.82 and len(q_tokens) <= len(topic_tokens) + 4:
+                continue
+        seen.add(key)
+        cleaned.append(q)
+    if not cleaned:
+        cleaned = [f"What do credible sources report about {topic.strip()}?"]
+    return cleaned[:MAX_RESEARCH_QUESTIONS]
+
+
 def default_questions(topic: str) -> list[str]:
     topic = topic.strip()
     lower = topic.lower()
     core = topic.rstrip("?").strip()
-    if lower.startswith(("who ", "who will", "will ", "which party", "which candidate")):
-        return [
-            core if topic.endswith("?") else f"{core}?",
-            f"What do polls, models, and credible analysts say about {core}?",
-            f"What historical patterns and indicators are relevant to {core}?",
-            f"What uncertainties could change the outcome of {core}?",
-        ][:MAX_RESEARCH_QUESTIONS]
-    if topic.endswith("?"):
-        return [
+    if len(topic.split()) <= 8:
+        return dedupe_questions(
             topic,
-            f"What verified facts and data exist today about {core}?",
-            f"What are competing expert perspectives on {core}?",
-            f"What is unknown or disputed about {core}?",
-        ][:MAX_RESEARCH_QUESTIONS]
-    return [
-        f"What should researchers know about {topic}?",
-        f"What is the current state of evidence on {topic}?",
-        f"What risks, debates, or limitations apply to {topic}?",
-        f"What is the near-term outlook for {topic}?",
-    ][:MAX_RESEARCH_QUESTIONS]
+            [
+                f"What do public sources report about {core}?",
+                f"What background context helps interpret information on {core}?",
+                f"What limitations exist in available data on {core}?",
+            ],
+        )
+    if lower.startswith(("who ", "who will", "will ", "which party", "which candidate")):
+        return dedupe_questions(
+            topic,
+            [
+                core if topic.endswith("?") else f"{core}?",
+                f"What do polls, models, and credible analysts say about {core}?",
+                f"What historical patterns and indicators are relevant to {core}?",
+                f"What uncertainties could change the outcome of {core}?",
+            ],
+        )
+    if topic.endswith("?"):
+        return dedupe_questions(
+            topic,
+            [
+                topic,
+                f"What verified facts and data exist today about {core}?",
+                f"What are competing expert perspectives on {core}?",
+                f"What is unknown or disputed about {core}?",
+            ],
+        )
+    return dedupe_questions(
+        topic,
+        [
+            f"What should researchers know about {topic}?",
+            f"What is the current state of evidence on {topic}?",
+            f"What risks, debates, or limitations apply to {topic}?",
+            f"What is the near-term outlook for {topic}?",
+        ],
+    )
 
 
 def plan_questions(topic: str, llm: ResearchLLM, *, use_llm: bool = False) -> list[str]:
@@ -66,7 +111,8 @@ def plan_questions(topic: str, llm: ResearchLLM, *, use_llm: bool = False) -> li
         human=f"Topic: {topic}",
     )
     parsed = _parse_numbered_lines(result.text)
-    return parsed[:MAX_RESEARCH_QUESTIONS] if len(parsed) >= 3 else questions
+    picked = parsed[:MAX_RESEARCH_QUESTIONS] if len(parsed) >= 3 else questions
+    return dedupe_questions(topic, picked)
 
 
 def search_for_questions(topic: str, questions: list[str]) -> tuple[list[SearchHit], str]:
@@ -165,9 +211,10 @@ def answer_questions(
     llm: ResearchLLM,
     *,
     use_llm: bool = False,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool]:
     corpus = _build_corpus(hits, pages)
     answers: list[dict[str, Any]] = []
+    llm_used = False
     for question in questions:
         evidence = _top_evidence(question, corpus, k=2)
         answer_text = _extractive_answer(evidence)
@@ -184,6 +231,7 @@ def answer_questions(
             )
             if llm_answer.used_llm and llm_answer.text:
                 answer_text = sanitize_reading_text(llm_answer.text, max_len=900)
+                llm_used = True
         answers.append(
             {
                 "question": question,
@@ -197,7 +245,7 @@ def answer_questions(
                 ],
             }
         )
-    return answers
+    return answers, llm_used
 
 
 def write_report(
@@ -207,7 +255,7 @@ def write_report(
     hits: list[SearchHit],
     pages: list[ScrapedPage],
     llm: ResearchLLM,
-) -> str:
+) -> tuple[str, bool]:
     answers_block = "\n\n".join(
         f"### {item['question']}\n{item['answer']}" for item in answers
     )
@@ -227,18 +275,99 @@ def write_report(
         ),
     )
     if llm_report.used_llm and llm_report.text:
-        return llm_report.text
-    return _extractive_report(topic, answers, references)
+        return llm_report.text, True
+    return _extractive_report(topic, answers, references), False
 
 
-def quick_critique(topic: str, answers: list[dict[str, Any]], hits: list[SearchHit]) -> str:
-    answered = sum(1 for item in answers if (item.get("answer") or "").strip())
-    score = min(10, 5 + answered + min(2, len(hits) // 4))
+def structured_critique(
+    topic: str,
+    answers: list[dict[str, Any]],
+    hits: list[SearchHit],
+    pages: list[ScrapedPage],
+    media: list[dict[str, Any]],
+    *,
+    fast_mode: bool,
+    used_llm_synthesis: bool,
+    groq_configured: bool,
+    tavily_configured: bool,
+    llm_error: str = "",
+) -> str:
+    answered = sum(1 for item in answers if len((item.get("answer") or "").split()) >= 20)
+    total_q = len(answers) or 1
+    avg_len = sum(len((item.get("answer") or "").split()) for item in answers) / total_q
+    source_links = sum(len(item.get("sources") or []) for item in answers)
+    readable_pages = sum(1 for page in pages if page.ok)
+
+    score = 4.0
+    score += min(2.0, len(hits) / 6.0)
+    score += min(1.5, readable_pages / 2.0)
+    score += min(1.5, len(media) / 5.0)
+    score += min(1.5, answered / max(total_q, 1) * 1.5)
+    score += min(1.0, avg_len / 120.0)
+    if used_llm_synthesis:
+        score += 0.8
+    if fast_mode:
+        score -= 0.7
+    if groq_configured and not used_llm_synthesis:
+        score -= 1.2
+    if len(hits) < 5:
+        score -= 1.0
+    if len(media) == 0:
+        score -= 0.8
+    score = max(3.0, min(9.6, score))
+    score_text = f"{score:.1f}/10"
+
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+    actions: list[str] = []
+
+    if answered >= total_q:
+        strengths.append(f"All {total_q} research questions received answers.")
+    else:
+        weaknesses.append(f"Only {answered}/{total_q} answers look sufficiently detailed.")
+    if len(hits) >= 8:
+        strengths.append(f"Broad source coverage ({len(hits)} links).")
+    else:
+        weaknesses.append(f"Source coverage is narrow ({len(hits)} links).")
+    if len(media) > 0:
+        strengths.append(f"Media discovery found {len(media)} image/video assets.")
+    else:
+        weaknesses.append("No media assets were discovered for this topic.")
+    if readable_pages >= 2:
+        strengths.append(f"Reader agent extracted {readable_pages} readable pages.")
+    else:
+        weaknesses.append("Few pages were readable; answers rely heavily on snippets.")
+
+    if used_llm_synthesis:
+        strengths.append("Groq synthesis was used for writing.")
+    elif groq_configured:
+        weaknesses.append(
+            "Groq is configured but synthesis did not run successfully"
+            + (f" ({llm_error})" if llm_error else ".")
+        )
+        actions.append("Verify Groq model access and quota, then rerun in Deep mode.")
+    else:
+        actions.append("Add Groq in Streamlit secrets for richer synthesis.")
+
+    if not tavily_configured:
+        actions.append("Add Tavily in secrets for deeper search results.")
+    if fast_mode:
+        actions.append("Disable Fast mode when you need deeper narrative synthesis.")
+
     return (
-        f"**Score: {score}/10**\n\n"
-        f"- Answered **{answered}/{len(answers)}** research questions\n"
-        f"- Used **{len(hits)}** unique sources\n"
-        f"- Fast mode prioritizes structured Q&A over long synthesis"
+        f"**Overall score: {score_text}**\n\n"
+        f"**Topic:** {topic}\n\n"
+        "**Strengths**\n"
+        + "".join(f"- {line}\n" for line in strengths)
+        + "\n**Weaknesses**\n"
+        + "".join(f"- {line}\n" for line in weaknesses)
+        + "\n**Recommended next steps**\n"
+        + "".join(f"- {line}\n" for line in actions)
+        + "\n**Evidence summary**\n"
+        f"- Source links: {len(hits)}\n"
+        f"- Readable pages: {readable_pages}\n"
+        f"- Media assets: {len(media)}\n"
+        f"- Cited links in answers: {source_links}\n"
     )
 
 
@@ -252,23 +381,7 @@ def critique_report(topic: str, report: str, answers: list[dict[str, Any]], llm:
     )
     if llm_review.used_llm and llm_review.text:
         return llm_review.text
-    source_count = sum(len(item.get("sources") or []) for item in answers)
-    answered = sum(1 for item in answers if (item.get("answer") or "").strip())
-    score = min(10, 4 + answered + min(3, source_count // 3))
-    return (
-        f"Score: {score}/10\n\n"
-        "Strengths\n"
-        f"- Answered {answered}/{len(answers) or 0} research questions with sourced snippets.\n"
-        f"- Gathered {source_count} supporting source links.\n\n"
-        "Weaknesses\n"
-        "- Groq LLM was not available, so the report is extractive rather than synthesized.\n"
-        "- Some live pages may have failed to scrape; snippets were used instead.\n\n"
-        "Suggestions\n"
-        "- Add GROQ_API_KEY for a richer Writer/Critic pass.\n"
-        "- Add TAVILY_API_KEY for deeper search results.\n\n"
-        "Overall Verdict\n"
-        "The pipeline returned real sources and a per-question answer instead of an empty success state."
-    )
+    return ""
 
 
 def _parse_numbered_lines(text: str) -> list[str]:

@@ -7,7 +7,7 @@ Scraping is best-effort and never raises to the agents.
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import quote, urlparse
 
@@ -45,6 +45,8 @@ class ScrapedPage:
     error: str = ""
     image_url: str = ""
     video_url: str = ""
+    image_urls: list[str] = field(default_factory=list)
+    video_urls: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -295,7 +297,7 @@ def scrape_url(url: str) -> ScrapedPage:
         if "pdf" in content_type or url.lower().endswith(".pdf"):
             return ScrapedPage(url=url, title="", text="", ok=False, error="PDF skipped")
 
-        image_url, video_url = extract_media_from_html(response.text, str(response.url))
+        image_urls, video_urls = extract_media_from_html(response.text, str(response.url))
         soup = _parse_html(response.text)
         title = _clean_text(soup.title.get_text() if soup.title else url)
         for tag in soup(
@@ -309,7 +311,14 @@ def scrape_url(url: str) -> ScrapedPage:
         if len(text) < 80:
             return ScrapedPage(url=url, title=title, text=text, ok=False, error="Page had too little text")
         return ScrapedPage(
-            url=url, title=title, text=text, ok=True, image_url=image_url, video_url=video_url
+            url=url,
+            title=title,
+            text=text,
+            ok=True,
+            image_url=image_urls[0] if image_urls else "",
+            video_url=video_urls[0] if video_urls else "",
+            image_urls=image_urls,
+            video_urls=video_urls,
         )
     except Exception as exc:  # noqa: BLE001
         return ScrapedPage(url=url, title="", text="", ok=False, error=str(exc))
