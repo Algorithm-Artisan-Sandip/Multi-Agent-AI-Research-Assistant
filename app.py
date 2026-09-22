@@ -167,7 +167,7 @@ if last and last.get("status") == "completed":
     m2.metric("Pages", len(pages))
     m3.metric("Questions", len(answers))
     m4.metric("Media", len(media))
-    m5.metric("Mode", "Fast" if last.get("fast_mode", True) else "Deep")
+    m5.metric("Synthesis", "Groq" if last.get("used_llm_synthesis") else "Extractive")
 
     tabs = st.tabs(["Overview", "Q&A", "Report", "Media", "Sources", "Review"])
 
