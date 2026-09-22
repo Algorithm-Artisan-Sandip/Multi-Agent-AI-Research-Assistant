@@ -12,6 +12,7 @@ from config import (
     MAX_RESULTS_PER_QUERY,
     MAX_SEARCH_QUERIES,
     MAX_TOTAL_HITS,
+    RESEARCH_SYSTEM,
     SCRAPE_WORKERS,
 )
 from llm import ResearchLLM
@@ -29,20 +30,27 @@ from tools import (
 
 def default_questions(topic: str) -> list[str]:
     topic = topic.strip()
-    if topic.endswith("?"):
-        core = topic.rstrip("?").strip()
+    lower = topic.lower()
+    core = topic.rstrip("?").strip()
+    if lower.startswith(("who ", "who will", "will ", "which party", "which candidate")):
         return [
-            topic if topic.endswith("?") else f"{core}?",
-            f"What is the current evidence and state of the art for {core}?",
-            f"What challenges, risks, or limitations relate to {core}?",
-            f"What is the likely outlook for {core} over the next 5–10 years?",
+            core if topic.endswith("?") else f"{core}?",
+            f"What do polls, models, and credible analysts say about {core}?",
+            f"What historical patterns and indicators are relevant to {core}?",
+            f"What uncertainties could change the outcome of {core}?",
+        ][:MAX_RESEARCH_QUESTIONS]
+    if topic.endswith("?"):
+        return [
+            topic,
+            f"What verified facts and data exist today about {core}?",
+            f"What are competing expert perspectives on {core}?",
+            f"What is unknown or disputed about {core}?",
         ][:MAX_RESEARCH_QUESTIONS]
     return [
-        f"Give a clear overview of {topic} and why it matters.",
-        f"What is the current state of {topic}?",
-        f"What are the main challenges, risks, or limitations around {topic}?",
-        f"What is the likely future of {topic} over the next 5–10 years?",
-        f"Which organizations, papers, or products are most important for {topic}?",
+        f"What should researchers know about {topic}?",
+        f"What is the current state of evidence on {topic}?",
+        f"What risks, debates, or limitations apply to {topic}?",
+        f"What is the near-term outlook for {topic}?",
     ][:MAX_RESEARCH_QUESTIONS]
 
 
@@ -74,7 +82,13 @@ def search_for_questions(topic: str, questions: list[str]) -> tuple[list[SearchH
         seen_queries.add(normalized)
         pending.append(query)
 
-    with ThreadPoolExecutor(max_workers=min(3, len(pending) or 1)) as pool:
+    for extra in (f"{topic} news analysis", f"{topic} forecast report"):
+        key = extra.strip().lower()
+        if key not in seen_queries:
+            seen_queries.add(key)
+            pending.append(extra)
+
+    with ThreadPoolExecutor(max_workers=min(4, len(pending) or 1)) as pool:
         futures = {pool.submit(web_search, query, MAX_RESULTS_PER_QUERY): query for query in pending}
         for future in as_completed(futures):
             try:
@@ -86,7 +100,7 @@ def search_for_questions(topic: str, questions: list[str]) -> tuple[list[SearchH
             hits.extend(batch)
 
     try:
-        wiki = wikipedia_search(topic, max_results=2)
+        wiki = wikipedia_search(topic, max_results=1)
         hits.extend(wiki)
         if wiki:
             provider_notes.append("wikipedia")
@@ -159,10 +173,7 @@ def answer_questions(
         answer_text = _extractive_answer(evidence)
         if use_llm and llm.available:
             llm_answer = llm.complete(
-                system=(
-                    "You are the Analyst Agent. Answer in 2 short paragraphs using ONLY the "
-                    "sources. Plain text, no markdown headers or bullet lists."
-                ),
+                system=RESEARCH_SYSTEM + " Answer in 2 short paragraphs.",
                 human=(
                     f"Topic: {topic}\nQuestion: {question}\n\nSources:\n"
                     + "\n\n".join(
@@ -203,9 +214,9 @@ def write_report(
     references = _references(hits, pages)
     llm_report = llm.complete(
         system=(
-            "You are the Writer Agent. Write a complete research report in Markdown. "
-            "Every research question must be answered in Key Findings. Use only the "
-            "provided research. Include a References section with real URLs."
+            RESEARCH_SYSTEM
+            + " Write a complete Markdown report. Every question must appear in Key Findings. "
+            "Include References with URLs."
         ),
         human=(
             f"Topic: {topic}\n\nResearch Q&A:\n{answers_block}\n\n"
@@ -358,6 +369,22 @@ def _references(hits: list[SearchHit], pages: list[ScrapedPage]) -> list[tuple[s
         seen.add(key)
         refs.append((title, url))
     return refs
+
+
+def build_executive_summary(topic: str, answers: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    seen: set[str] = set()
+    for item in answers:
+        text = sanitize_reading_text(item.get("answer") or "", max_len=320)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        parts.append(text)
+        if len(parts) >= 3:
+            break
+    if parts:
+        return " ".join(parts)
+    return f"Research collected on: {topic}"
 
 
 def _extractive_report(topic: str, answers: list[dict[str, Any]], references: list[tuple[str, str]]) -> str:

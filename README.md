@@ -19,11 +19,13 @@ streamlit run streamlit_app.py
 | Main file | `streamlit_app.py` |
 | Sharing | **Public** (required or visitors see a login wall) |
 
-Optional secrets:
+Optional secrets (never shown in the UI):
 
 ```toml
 GROQ_API_KEY = "your_groq_key"
 TAVILY_API_KEY = "your_tavily_key"
 ```
+
+The app accepts any research topic locally (no in-app topic blocklist). Reports include a **Media** tab when images/videos are discovered from sources.
 
 Heavy agent code loads only when you click **Generate Research Report**, so cold starts stay fast.

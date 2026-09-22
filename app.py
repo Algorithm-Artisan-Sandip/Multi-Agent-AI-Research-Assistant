@@ -1,13 +1,14 @@
 import html
+import json
 
 import streamlit as st
 
-from config import groq_api_key, set_runtime_keys, tavily_api_key
+from config import integration_status
 from text_clean import dedupe_sources, sanitize_reading_text, sanitize_report_markdown
 
 st.set_page_config(
-    page_title="Multi-Agent AI Research Assistant",
-    page_icon="🤖",
+    page_title="AI Research Assistant Pro",
+    page_icon="🛰️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -15,28 +16,44 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-html, body, [class*="css"]{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-.stApp{
-    background:
-        radial-gradient(circle at top left,#22254b 0%,#0E1117 35%),
-        radial-gradient(circle at bottom right,#24183d 0%,#0E1117 35%);
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', system-ui, sans-serif; }
+.stApp {
+  background: radial-gradient(1200px 600px at 10% -10%, #1e2a5a 0%, transparent 55%),
+              radial-gradient(900px 500px at 100% 0%, #3b1d60 0%, transparent 50%),
+              #0b0f17;
+  color: #e8edf7;
 }
-section[data-testid="stSidebar"]{ background:#10151F; border-right:1px solid #2d3442; }
-.main-title{ text-align:center; font-size:42px; font-weight:700; color:white; margin-top:8px; }
-.subtitle{ text-align:center; font-size:17px; color:#C4CBD8; margin-bottom:18px; }
-.panel{
-    background:#161B22; padding:16px 18px; border-radius:14px;
-    border:1px solid #2F3847; margin-bottom:12px;
+section[data-testid="stSidebar"] {
+  background: rgba(12, 16, 26, 0.92);
+  border-right: 1px solid rgba(255,255,255,0.08);
 }
-.q-title{ font-size:1.05rem; font-weight:600; margin-bottom:8px; color:#E8EDF5; }
-.q-body{ color:#D5DCE8; line-height:1.65; margin-bottom:10px; }
-.source-chip{
-    display:inline-block; margin:4px 8px 4px 0; padding:6px 10px;
-    border-radius:999px; background:#1F2937; border:1px solid #374151; font-size:0.85rem;
+.hero {
+  padding: 28px 28px 22px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: linear-gradient(135deg, rgba(91,141,239,0.18), rgba(139,92,246,0.14));
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  margin-bottom: 18px;
 }
-div.stButton > button{
-    width:100%; height:54px; font-size:17px; font-weight:600; border:none;
-    border-radius:12px; background:linear-gradient(90deg,#5B8DEF,#8B5CF6); color:white;
+.hero h1 { margin: 0; font-size: 2rem; font-weight: 700; }
+.hero p { margin: 8px 0 0; color: #c6d0e4; }
+.badge {
+  display:inline-block; padding:6px 12px; margin:4px 6px 0 0;
+  border-radius:999px; font-size:0.78rem; font-weight:600;
+  border:1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06);
+}
+.badge.ok { color:#86efac; border-color: rgba(134,239,172,0.35); }
+.badge.dim { color:#cbd5e1; }
+div.stButton > button {
+  height: 52px; border-radius: 14px; border: none; font-weight: 600;
+  background: linear-gradient(90deg, #5B8DEF, #8B5CF6);
+}
+[data-testid="stMetric"] {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 8px 10px;
 }
 </style>
 """,
@@ -46,62 +63,74 @@ div.stButton > button{
 if "result" not in st.session_state:
     st.session_state.result = None
 
+status = integration_status()
+
 with st.sidebar:
-    st.markdown("## 🤖 AI Research Assistant")
+    st.markdown("### 🛰️ Research Control")
+    st.markdown("Multi-agent pipeline with parallel search, reader, writer, and critic.")
+    fast_mode = st.toggle("⚡ Fast mode", value=True, help="Recommended for speed.")
+    deep_review = st.toggle("🧠 Deep LLM synthesis", value=False, disabled=fast_mode)
     st.markdown("---")
+    st.markdown("**Integrations (from server secrets)**")
+    groq_badge = "ok" if status["groq"] else "dim"
+    tavily_badge = "ok" if status["tavily"] else "dim"
     st.markdown(
-        """
-**Agents:** Planner → Search → Reader → Writer → Critic
-
-**Fast mode (default):** fewer sources, parallel fetch, structured Q&A UI.
-"""
+        f'<span class="badge {groq_badge}">Groq: {"connected" if status["groq"] else "fallback"}</span>'
+        f'<span class="badge {tavily_badge}">Tavily: {"connected" if status["tavily"] else "open web"}</span>',
+        unsafe_allow_html=True,
     )
-    fast_mode = st.toggle("⚡ Fast mode", value=True)
-    deep_review = st.toggle("⭐ Deep LLM review", value=False, disabled=fast_mode)
-    st.markdown("---")
-    st.markdown("### API keys (optional)")
-    groq_in = st.text_input("GROQ_API_KEY", value=groq_api_key(), type="password")
-    tavily_in = st.text_input("TAVILY_API_KEY", value=tavily_api_key(), type="password")
-    set_runtime_keys(groq=groq_in, tavily=tavily_in)
-    if groq_in and tavily_in:
-        st.success("Groq + Tavily ready")
-    elif groq_in:
-        st.info("Groq ready")
-    else:
-        st.caption("Works without keys (extractive mode)")
+    st.caption("API keys are not shown in the UI. Configure them in Streamlit Cloud → Secrets.")
 
-st.markdown('<div class="main-title">🤖 Multi-Agent AI Research Assistant</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="subtitle">Structured research output — clean answers, sources, and report tabs.</div>',
+    """
+<div class="hero">
+  <h1>🛰️ Advanced Multi-Agent Research Assistant</h1>
+  <p>Open-topic research with structured reports, media discovery, and source transparency.</p>
+</div>
+""",
     unsafe_allow_html=True,
 )
 
 last = st.session_state.result
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Agents", "5")
-c2.metric("LLM", (last or {}).get("model") or ("Groq" if groq_api_key() else "Extractive"))
-c3.metric("Search", "Tavily" if tavily_api_key() else "DuckDuckGo")
+c2.metric("LLM", (last or {}).get("model") or ("Groq" if status["groq"] else "Extractive"))
+c3.metric("Search", "Tavily" if status["tavily"] else "Multi-provider")
 c4.metric("Status", (last or {}).get("status", "Ready").title())
 
+examples = [
+    "Quantum computing future",
+    "Who will win mid term election in USA in 2026",
+    "Global semiconductor supply chain 2026",
+    "CRISPR therapy clinical trials",
+]
+st.caption("Try an example topic")
+ex_cols = st.columns(len(examples))
+example_choice = None
+for col, ex in zip(ex_cols, examples):
+    if col.button(ex, use_container_width=True):
+        example_choice = ex
+
 topic = st.text_input(
-    "🔎 Research topic",
-    placeholder="Example: Quantum computing future",
+    "Research topic",
+    value=example_choice or "",
+    placeholder="Any research question or topic — politics, science, markets, history…",
 )
 
-run = st.button("🚀 Generate Research Report", use_container_width=True)
+run = st.button("Generate research report", type="primary", use_container_width=True)
 
 if run:
     if not topic.strip():
-        st.warning("Please enter a research topic.")
+        st.warning("Enter a research topic.")
     else:
         progress = st.progress(0)
-        status = st.empty()
+        status_box = st.empty()
 
         def on_progress(pct: int, message: str) -> None:
             progress.progress(min(max(pct, 0), 100))
-            status.info(message)
+            status_box.info(message)
 
-        with st.spinner("Running agents…"):
+        with st.spinner("Agents running…"):
             from pipeline import run_research_pipeline
 
             result = run_research_pipeline(
@@ -112,11 +141,10 @@ if run:
         result["topic"] = topic.strip()
         st.session_state.result = result
         last = result
-
         if result.get("status") == "completed":
-            status.success("✅ Research complete — open the tabs below.")
+            status_box.success("Research complete. Explore the structured tabs below.")
         else:
-            status.error("Research did not complete.")
+            status_box.error("Research could not be completed.")
             for err in result.get("errors") or []:
                 st.error(err)
 
@@ -125,80 +153,113 @@ if last and last.get("status") == "completed":
     hits = last.get("search_hits") or []
     pages = [p for p in (last.get("scraped_pages") or []) if p.get("ok")]
     answers = last.get("answers") or []
+    media = last.get("media") or []
     report = sanitize_report_markdown((last.get("report") or "").strip())
     feedback = (last.get("feedback") or "").strip()
-
-    st.markdown("---")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Sources", len(hits))
-    m2.metric("Pages read", len(pages))
-    m3.metric("Questions", len(answers))
-    m4.metric("Mode", "Fast" if last.get("fast_mode", True) else "Deep")
-
-    tab_overview, tab_qa, tab_report, tab_sources, tab_review = st.tabs(
-        ["📌 Overview", "🧩 Q&A", "📄 Report", "🔗 Sources", "⭐ Review"]
+    summary = sanitize_reading_text(
+        last.get("executive_summary") or (answers[0].get("answer") if answers else ""),
+        max_len=700,
     )
 
-    with tab_overview:
-        with st.container(border=True):
-            st.markdown(f"### Topic: {last.get('topic') or ''}")
-            if answers:
-                lead = sanitize_reading_text(answers[0].get("answer") or "", max_len=500)
-                st.markdown("**Executive summary**")
-                st.write(lead or "Summary unavailable.")
+    st.markdown("---")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Sources", len(hits))
+    m2.metric("Pages", len(pages))
+    m3.metric("Questions", len(answers))
+    m4.metric("Media", len(media))
+    m5.metric("Mode", "Fast" if last.get("fast_mode", True) else "Deep")
 
-        if answers:
-            st.markdown("**Research plan answered**")
-            for idx, item in enumerate(answers, start=1):
-                st.markdown(f"{idx}. {item.get('question') or ''}")
+    tabs = st.tabs(["Overview", "Q&A", "Report", "Media", "Sources", "Review"])
 
-    with tab_qa:
-        for idx, item in enumerate(answers, start=1):
+    with tabs[0]:
+        st.subheader(last.get("topic") or "Research topic")
+        st.markdown("**Executive summary**")
+        st.write(summary or "Summary unavailable.")
+        st.markdown("**Research plan**")
+        for i, item in enumerate(answers, start=1):
+            st.markdown(f"{i}. {item.get('question') or ''}")
+
+    with tabs[1]:
+        for i, item in enumerate(answers, start=1):
             sources = dedupe_sources(item.get("sources") or [])
-            body = sanitize_reading_text(item.get("answer") or "", max_len=900)
+            body = sanitize_reading_text(item.get("answer") or "", max_len=1000)
             with st.container(border=True):
-                st.markdown(f"**Q{idx}. {item.get('question') or ''}**")
+                st.markdown(f"**Q{i}. {item.get('question') or ''}**")
                 st.write(body)
                 if sources:
-                    cols = st.columns(min(3, len(sources)))
-                    for col, src in zip(cols, sources):
+                    sc = st.columns(min(3, len(sources)))
+                    for col, src in zip(sc, sources):
                         with col:
-                            st.link_button(src["title"][:48], src["url"], use_container_width=True)
+                            st.link_button(src["title"][:40], src["url"], use_container_width=True)
 
-    with tab_report:
+    with tabs[2]:
         if report:
             st.markdown(report)
-            st.download_button(
-                "📥 Download report",
+            bundle = {
+                "topic": last.get("topic"),
+                "report": report,
+                "answers": answers,
+                "media": media,
+                "sources": hits,
+            }
+            c1, c2 = st.columns(2)
+            c1.download_button(
+                "Download report (Markdown)",
                 data=report,
-                file_name=f"{(last.get('topic') or 'research').replace(' ', '_')}_report.txt",
-                mime="text/plain",
+                file_name=f"{(last.get('topic') or 'research').replace(' ', '_')}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+            c2.download_button(
+                "Download full bundle (JSON)",
+                data=json.dumps(bundle, indent=2),
+                file_name=f"{(last.get('topic') or 'research').replace(' ', '_')}_bundle.json",
+                mime="application/json",
                 use_container_width=True,
             )
         else:
-            st.info("No report text available.")
+            st.info("No report generated.")
 
-    with tab_sources:
-        st.caption("Unique links collected by the Search and Reader agents.")
-        for hit in hits[:20]:
-            title = sanitize_reading_text(hit.get("title") or "Source", max_len=100)
+    with tabs[3]:
+        if not media:
+            st.info("No media assets discovered for this run.")
+        else:
+            images = [m for m in media if m.get("type") == "image"]
+            videos = [m for m in media if m.get("type") == "video"]
+            if images:
+                st.markdown("**Images**")
+                cols = st.columns(3)
+                for idx, item in enumerate(images[:9]):
+                    with cols[idx % 3]:
+                        st.caption(item.get("title") or "Image")
+                        try:
+                            st.image(item["url"], use_container_width=True)
+                        except Exception:
+                            st.link_button("Open image", item["url"], use_container_width=True)
+            if videos:
+                st.markdown("**Videos & embeds**")
+                for item in videos:
+                    st.link_button(item.get("title") or "Video", item["url"], use_container_width=True)
+
+    with tabs[4]:
+        for hit in hits[:25]:
+            title = sanitize_reading_text(hit.get("title") or "Source", max_len=120)
             url = hit.get("url") or ""
-            snippet = sanitize_reading_text(hit.get("snippet") or "", max_len=220)
+            snippet = sanitize_reading_text(hit.get("snippet") or "", max_len=260)
             st.markdown(f"**{title}** · `{hit.get('source', 'web')}`")
-            st.link_button("Open source", url, use_container_width=False)
+            st.link_button("Open", url, use_container_width=False)
             if snippet:
-                st.write(snippet)
+                st.caption(snippet)
             st.divider()
 
-    with tab_review:
+    with tabs[5]:
         if feedback:
             st.markdown(feedback)
         else:
-            st.info("No critic review for this run.")
+            st.info("No review available.")
 
-    with st.expander("📋 Agent log", expanded=False):
+    with st.expander("Agent log", expanded=False):
         for line in last.get("logs") or []:
             st.write(f"- {line}")
 
-st.markdown("---")
-st.caption("Multi-agent orchestration · Groq · Tavily · DuckDuckGo · Wikipedia · Streamlit")
+st.caption("Research assistant · keys via Streamlit Secrets only · Groq · Tavily · DuckDuckGo · Wikipedia")

@@ -13,6 +13,7 @@ from agents import (
     search_for_questions,
     write_report,
 )
+from media_assets import collect_media_items
 from text_clean import sanitize_report_markdown
 from llm import ResearchLLM
 from tools import SearchHit, ScrapedPage, format_hits, format_pages
@@ -38,6 +39,8 @@ class ResearchState(TypedDict, total=False):
     used_llm: bool
     status: str
     fast_mode: bool
+    media: list[dict[str, Any]]
+    executive_summary: str
 
 
 def _log(state: ResearchState, message: str) -> list[str]:
@@ -118,16 +121,21 @@ def _reader(state: ResearchState, progress: ProgressCb | None) -> ResearchState:
             {
                 "scraped_pages": [page.to_dict() for page in pages],
                 "scraped_content": formatted,
+                "media": [],
                 "errors": errors,
                 "logs": logs,
                 "status": "failed",
             },
         )
+    page_dicts = [page.to_dict() for page in pages]
+    media = collect_media_items(page_dicts, state.get("search_hits") or [])
+    logs = _log({**state, "logs": logs}, f"Reader Agent: {len(media)} media assets")
     return _merge(
         state,
         {
-            "scraped_pages": [page.to_dict() for page in pages],
+            "scraped_pages": page_dicts,
             "scraped_content": formatted,
+            "media": media,
             "logs": logs,
         },
     )
@@ -157,8 +165,19 @@ def _writer(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
             state,
             {"answers": answers, "report": "", "errors": errors, "logs": logs, "status": "failed"},
         )
+    from agents import build_executive_summary
+
+    summary = build_executive_summary(state["topic"], answers)
+    media = state.get("media") or []
+    if media:
+        report += "\n\n## Media & Visual Sources\n"
+        for item in media[:12]:
+            report += f"- ({item['type']}) {item['title']}: {item['url']}\n"
     logs = _log({**state, "logs": logs}, f"Writer Agent: answered {len(answers)} questions")
-    return _merge(state, {"answers": answers, "report": report, "logs": logs})
+    return _merge(
+        state,
+        {"answers": answers, "report": report, "executive_summary": summary, "logs": logs},
+    )
 
 
 def _critic(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None) -> ResearchState:
@@ -202,6 +221,8 @@ def run_research_pipeline(
         "fast_mode": fast_mode,
         "search_results": "No search results available.",
         "scraped_content": "No scraped content available.",
+        "media": [],
+        "executive_summary": "",
     }
 
     try:

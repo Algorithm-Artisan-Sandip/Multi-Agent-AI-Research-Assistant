@@ -59,8 +59,19 @@ def tavily_api_key() -> str:
 
 
 def set_runtime_keys(*, groq: str | None = None, tavily: str | None = None) -> None:
-    """Allow the Streamlit UI to inject keys for the current process."""
+    """Inject keys for tests or local scripts (not exposed in the Streamlit UI)."""
     if groq is not None:
         os.environ["GROQ_API_KEY"] = groq.strip()
     if tavily is not None:
         os.environ["TAVILY_API_KEY"] = tavily.strip()
+
+
+def integration_status() -> dict[str, bool]:
+    return {"groq": bool(groq_api_key()), "tavily": bool(tavily_api_key())}
+
+
+RESEARCH_SYSTEM = (
+    "You are a neutral research analyst. Use only the supplied sources. "
+    "The application does not block research topics: summarize public information, "
+    "note uncertainty, and avoid speculation beyond the evidence. Plain text only."
+)

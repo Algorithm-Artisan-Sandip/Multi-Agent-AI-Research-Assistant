@@ -15,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import REQUEST_TIMEOUT_SECONDS, SCRAPE_WORKERS, USER_AGENT, tavily_api_key
+from media_assets import extract_media_from_html
 from text_clean import sanitize_reading_text
 
 REQUEST_TIMEOUT = REQUEST_TIMEOUT_SECONDS
@@ -42,6 +43,8 @@ class ScrapedPage:
     text: str
     ok: bool
     error: str = ""
+    image_url: str = ""
+    video_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -292,6 +295,7 @@ def scrape_url(url: str) -> ScrapedPage:
         if "pdf" in content_type or url.lower().endswith(".pdf"):
             return ScrapedPage(url=url, title="", text="", ok=False, error="PDF skipped")
 
+        image_url, video_url = extract_media_from_html(response.text, str(response.url))
         soup = _parse_html(response.text)
         title = _clean_text(soup.title.get_text() if soup.title else url)
         for tag in soup(
@@ -304,7 +308,9 @@ def scrape_url(url: str) -> ScrapedPage:
         )
         if len(text) < 80:
             return ScrapedPage(url=url, title=title, text=text, ok=False, error="Page had too little text")
-        return ScrapedPage(url=url, title=title, text=text, ok=True)
+        return ScrapedPage(
+            url=url, title=title, text=text, ok=True, image_url=image_url, video_url=video_url
+        )
     except Exception as exc:  # noqa: BLE001
         return ScrapedPage(url=url, title="", text="", ok=False, error=str(exc))
 
