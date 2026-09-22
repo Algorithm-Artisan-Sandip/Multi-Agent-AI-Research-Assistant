@@ -13,6 +13,14 @@ USER_AGENT = (
     "+https://github.com/Algorithm-Artisan-Sandip/Multi-Agent-AI-Research-Assistant)"
 )
 
+MAX_RESEARCH_QUESTIONS = 4
+MAX_SEARCH_QUERIES = 3
+MAX_RESULTS_PER_QUERY = 3
+MAX_TOTAL_HITS = 12
+MAX_PAGES_TO_READ = 3
+SCRAPE_WORKERS = 4
+REQUEST_TIMEOUT_SECONDS = 8
+
 GROQ_MODEL_CANDIDATES = [
     "llama-3.1-8b-instant",
     "llama-3.3-70b-versatile",

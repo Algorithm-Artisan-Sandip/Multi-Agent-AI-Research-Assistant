@@ -14,9 +14,10 @@ from urllib.parse import quote, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from config import USER_AGENT, tavily_api_key
+from config import REQUEST_TIMEOUT_SECONDS, SCRAPE_WORKERS, USER_AGENT, tavily_api_key
+from text_clean import sanitize_reading_text
 
-REQUEST_TIMEOUT = 12
+REQUEST_TIMEOUT = REQUEST_TIMEOUT_SECONDS
 MAX_SCRAPE_CHARS = 6000
 MAX_SNIPPET_CHARS = 1200
 
@@ -265,7 +266,7 @@ def web_search(query: str, max_results: int = 5) -> list[SearchHit]:
     if not hits and errors:
         raise RuntimeError("All search providers failed: " + "; ".join(errors))
 
-    return _dedupe(hits)[: max(max_results, 5)]
+    return _dedupe(hits)[:max_results]
 
 
 def _dedupe(hits: list[SearchHit]) -> list[SearchHit]:
@@ -293,9 +294,14 @@ def scrape_url(url: str) -> ScrapedPage:
 
         soup = _parse_html(response.text)
         title = _clean_text(soup.title.get_text() if soup.title else url)
-        for tag in soup(["script", "style", "header", "footer", "nav", "aside", "noscript", "form"]):
+        for tag in soup(
+            ["script", "style", "header", "footer", "nav", "aside", "noscript", "form", "img", "svg", "picture", "figure"]
+        ):
             tag.decompose()
-        text = _clean_text(soup.get_text(separator=" ", strip=True))[:MAX_SCRAPE_CHARS]
+        text = sanitize_reading_text(
+            _clean_text(soup.get_text(separator=" ", strip=True)),
+            max_len=MAX_SCRAPE_CHARS,
+        )
         if len(text) < 80:
             return ScrapedPage(url=url, title=title, text=text, ok=False, error="Page had too little text")
         return ScrapedPage(url=url, title=title, text=text, ok=True)

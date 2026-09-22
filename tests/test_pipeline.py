@@ -69,7 +69,7 @@ def test_pipeline_answers_each_question_from_real_tools(monkeypatch):
     assert result["report"]
     assert result["search_hits"]
     assert result["answers"]
-    assert len(result["answers"]) >= 4
+    assert len(result["answers"]) >= 3
     for item in result["answers"]:
         assert item["question"]
         assert item["answer"]

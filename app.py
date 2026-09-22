@@ -3,6 +3,7 @@ import html
 import streamlit as st
 
 from config import groq_api_key, set_runtime_keys, tavily_api_key
+from text_clean import dedupe_sources, sanitize_reading_text, sanitize_report_markdown
 
 st.set_page_config(
     page_title="Multi-Agent AI Research Assistant",
@@ -19,32 +20,24 @@ html, body, [class*="css"]{ font-family: system-ui, -apple-system, Segoe UI, Rob
     background:
         radial-gradient(circle at top left,#22254b 0%,#0E1117 35%),
         radial-gradient(circle at bottom right,#24183d 0%,#0E1117 35%);
-    color:white;
 }
 section[data-testid="stSidebar"]{ background:#10151F; border-right:1px solid #2d3442; }
-.main-title{ text-align:center; font-size:46px; font-weight:700; color:white; margin-top:10px; }
-.subtitle{ text-align:center; font-size:18px; color:#C4CBD8; margin-bottom:24px; }
-.card, .metric-card{
-    background:#161B22; padding:18px; border-radius:16px;
-    border:1px solid #2F3847; box-shadow:0px 6px 18px rgba(0,0,0,.35);
+.main-title{ text-align:center; font-size:42px; font-weight:700; color:white; margin-top:8px; }
+.subtitle{ text-align:center; font-size:17px; color:#C4CBD8; margin-bottom:18px; }
+.panel{
+    background:#161B22; padding:16px 18px; border-radius:14px;
+    border:1px solid #2F3847; margin-bottom:12px;
 }
-.report-card{
-    background:#171F2C; padding:25px; border-radius:16px;
-    border-left:6px solid #5B8DEF; color:white; line-height:1.8;
-}
-.feedback-card{
-    background:#221C35; padding:25px; border-radius:16px;
-    border-left:6px solid #A855F7; color:white; line-height:1.8;
-}
-.answer-card{
-    background:#162033; padding:18px; border-radius:14px;
-    border:1px solid #2F3847; margin-bottom:12px; line-height:1.7;
+.q-title{ font-size:1.05rem; font-weight:600; margin-bottom:8px; color:#E8EDF5; }
+.q-body{ color:#D5DCE8; line-height:1.65; margin-bottom:10px; }
+.source-chip{
+    display:inline-block; margin:4px 8px 4px 0; padding:6px 10px;
+    border-radius:999px; background:#1F2937; border:1px solid #374151; font-size:0.85rem;
 }
 div.stButton > button{
-    width:100%; height:58px; font-size:18px; font-weight:600; border:none;
+    width:100%; height:54px; font-size:17px; font-weight:600; border:none;
     border-radius:12px; background:linear-gradient(90deg,#5B8DEF,#8B5CF6); color:white;
 }
-hr{ border:0; border-top:1px solid #2F3847; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -54,59 +47,52 @@ if "result" not in st.session_state:
     st.session_state.result = None
 
 with st.sidebar:
-    st.markdown("## 🤖")
-    st.title("AI Research Assistant")
+    st.markdown("## 🤖 AI Research Assistant")
     st.markdown("---")
-    st.markdown("## ⚙️ Workflow")
     st.markdown(
         """
-🧭 **Planner Agent** — research questions
+**Agents:** Planner → Search → Reader → Writer → Critic
 
-🔍 **Search Agent** — Tavily / DuckDuckGo / Wikipedia
-
-🌐 **Reader Agent** — scrape source pages
-
-📝 **Writer Agent** — answer every question
-
-⭐ **Critic Agent** — score and review
+**Fast mode (default):** fewer sources, parallel fetch, structured Q&A UI.
 """
     )
+    fast_mode = st.toggle("⚡ Fast mode", value=True)
+    deep_review = st.toggle("⭐ Deep LLM review", value=False, disabled=fast_mode)
     st.markdown("---")
     st.markdown("### API keys (optional)")
     groq_in = st.text_input("GROQ_API_KEY", value=groq_api_key(), type="password")
     tavily_in = st.text_input("TAVILY_API_KEY", value=tavily_api_key(), type="password")
     set_runtime_keys(groq=groq_in, tavily=tavily_in)
     if groq_in and tavily_in:
-        st.success("Groq + Tavily configured")
+        st.success("Groq + Tavily ready")
     elif groq_in:
-        st.info("Groq on · search will use DuckDuckGo/Wikipedia")
+        st.info("Groq ready")
     else:
-        st.warning("No Groq key · extractive report from live sources still runs")
-    st.caption("Powered by multi-agent orchestration")
+        st.caption("Works without keys (extractive mode)")
 
 st.markdown('<div class="main-title">🤖 Multi-Agent AI Research Assistant</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="subtitle">Each query is planned, searched, read, answered, and reviewed — not marked done while empty.</div>',
+    '<div class="subtitle">Structured research output — clean answers, sources, and report tabs.</div>',
     unsafe_allow_html=True,
 )
 
+last = st.session_state.result
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Agents", "5")
-c2.metric("LLM", "Groq" if groq_api_key() else "Extractive")
+c2.metric("LLM", (last or {}).get("model") or ("Groq" if groq_api_key() else "Extractive"))
 c3.metric("Search", "Tavily" if tavily_api_key() else "DuckDuckGo")
-last = st.session_state.result
 c4.metric("Status", (last or {}).get("status", "Ready").title())
 
 topic = st.text_input(
-    "🔎 Enter your research topic or question",
-    placeholder="Example: Quantum Computing Future",
+    "🔎 Research topic",
+    placeholder="Example: Quantum computing future",
 )
 
 run = st.button("🚀 Generate Research Report", use_container_width=True)
 
 if run:
     if not topic.strip():
-        st.warning("⚠️ Please enter a research topic.")
+        st.warning("Please enter a research topic.")
     else:
         progress = st.progress(0)
         status = st.empty()
@@ -115,92 +101,104 @@ if run:
             progress.progress(min(max(pct, 0), 100))
             status.info(message)
 
-        with st.spinner("Running Planner → Search → Reader → Writer → Critic..."):
+        with st.spinner("Running agents…"):
             from pipeline import run_research_pipeline
 
-            result = run_research_pipeline(topic.strip(), progress=on_progress)
+            result = run_research_pipeline(
+                topic.strip(),
+                progress=on_progress,
+                fast_mode=fast_mode and not deep_review,
+            )
+        result["topic"] = topic.strip()
         st.session_state.result = result
         last = result
 
-        if result.get("status") == "completed" and result.get("report") and result.get("search_hits"):
-            status.success("✅ Research completed with sources and answers.")
+        if result.get("status") == "completed":
+            status.success("✅ Research complete — open the tabs below.")
         else:
-            status.error("❌ Research did not produce a complete result.")
+            status.error("Research did not complete.")
             for err in result.get("errors") or []:
                 st.error(err)
 
 last = st.session_state.result
-if last:
-    st.write("")
-    m1, m2, m3 = st.columns(3)
+if last and last.get("status") == "completed":
     hits = last.get("search_hits") or []
-    pages = last.get("scraped_pages") or []
-    readable = [page for page in pages if page.get("ok")]
-    m1.metric("Sources found", str(len(hits)))
-    m2.metric("Pages read", str(len(readable)))
-    m3.metric("Model", last.get("model") or "—")
-
+    pages = [p for p in (last.get("scraped_pages") or []) if p.get("ok")]
     answers = last.get("answers") or []
-    if answers:
-        st.markdown("## 🧩 Answers to each research question")
-        for item in answers:
-            sources = item.get("sources") or []
-            source_html = "".join(
-                f'<div>• <a href="{html.escape(src.get("url", ""), quote=True)}" target="_blank">'
-                f'{html.escape(src.get("title") or src.get("url") or "")}</a></div>'
-                for src in sources
-            )
-            st.markdown(f"#### {item.get('question') or ''}")
-            st.markdown(item.get("answer") or "")
-            if source_html:
-                st.markdown(source_html, unsafe_allow_html=True)
-            st.markdown("---")
-
-    report = (last.get("report") or "").strip()
-    if report:
-        st.markdown("## 📄 Research Report")
-        st.markdown(report)
-        st.download_button(
-            "📥 Download Report",
-            data=report,
-            file_name=f"{(last.get('topic') or 'research').replace(' ', '_')}_Research_Report.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    elif last.get("status") == "completed":
-        st.error("The pipeline claimed success but the report was empty.")
-
+    report = sanitize_report_markdown((last.get("report") or "").strip())
     feedback = (last.get("feedback") or "").strip()
-    if feedback:
-        st.markdown("## ⭐ Critic Review")
-        st.markdown(feedback)
 
-    with st.expander("🔍 Search Results", expanded=not hits):
-        if hits:
-            for hit in hits:
-                st.markdown(f"**{hit.get('title') or 'Untitled'}** · {hit.get('source')}  \n{hit.get('url')}  \n{hit.get('snippet')}")
-                st.markdown("---")
+    st.markdown("---")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Sources", len(hits))
+    m2.metric("Pages read", len(pages))
+    m3.metric("Questions", len(answers))
+    m4.metric("Mode", "Fast" if last.get("fast_mode", True) else "Deep")
+
+    tab_overview, tab_qa, tab_report, tab_sources, tab_review = st.tabs(
+        ["📌 Overview", "🧩 Q&A", "📄 Report", "🔗 Sources", "⭐ Review"]
+    )
+
+    with tab_overview:
+        with st.container(border=True):
+            st.markdown(f"### Topic: {last.get('topic') or ''}")
+            if answers:
+                lead = sanitize_reading_text(answers[0].get("answer") or "", max_len=500)
+                st.markdown("**Executive summary**")
+                st.write(lead or "Summary unavailable.")
+
+        if answers:
+            st.markdown("**Research plan answered**")
+            for idx, item in enumerate(answers, start=1):
+                st.markdown(f"{idx}. {item.get('question') or ''}")
+
+    with tab_qa:
+        for idx, item in enumerate(answers, start=1):
+            sources = dedupe_sources(item.get("sources") or [])
+            body = sanitize_reading_text(item.get("answer") or "", max_len=900)
+            with st.container(border=True):
+                st.markdown(f"**Q{idx}. {item.get('question') or ''}**")
+                st.write(body)
+                if sources:
+                    cols = st.columns(min(3, len(sources)))
+                    for col, src in zip(cols, sources):
+                        with col:
+                            st.link_button(src["title"][:48], src["url"], use_container_width=True)
+
+    with tab_report:
+        if report:
+            st.markdown(report)
+            st.download_button(
+                "📥 Download report",
+                data=report,
+                file_name=f"{(last.get('topic') or 'research').replace(' ', '_')}_report.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
         else:
-            st.warning("No search results available.")
+            st.info("No report text available.")
 
-    with st.expander("🌐 Scraped Content", expanded=not readable):
-        if readable:
-            for page in readable:
-                st.markdown(f"**{page.get('title') or page.get('url')}**  \n{page.get('url')}  \n{page.get('text', '')[:1500]}")
-                st.markdown("---")
+    with tab_sources:
+        st.caption("Unique links collected by the Search and Reader agents.")
+        for hit in hits[:20]:
+            title = sanitize_reading_text(hit.get("title") or "Source", max_len=100)
+            url = hit.get("url") or ""
+            snippet = sanitize_reading_text(hit.get("snippet") or "", max_len=220)
+            st.markdown(f"**{title}** · `{hit.get('source', 'web')}`")
+            st.link_button("Open source", url, use_container_width=False)
+            if snippet:
+                st.write(snippet)
+            st.divider()
+
+    with tab_review:
+        if feedback:
+            st.markdown(feedback)
         else:
-            st.warning("No scraped content available.")
+            st.info("No critic review for this run.")
 
-    with st.expander("📋 Agent log"):
+    with st.expander("📋 Agent log", expanded=False):
         for line in last.get("logs") or []:
             st.write(f"- {line}")
 
 st.markdown("---")
-st.markdown(
-    """
-<div style="text-align:center;color:#AAB3C5;">
-Built with <b>multi-agent orchestration</b> · Groq · Tavily · DuckDuckGo · Wikipedia · Streamlit
-</div>
-""",
-    unsafe_allow_html=True,
-)
+st.caption("Multi-agent orchestration · Groq · Tavily · DuckDuckGo · Wikipedia · Streamlit")

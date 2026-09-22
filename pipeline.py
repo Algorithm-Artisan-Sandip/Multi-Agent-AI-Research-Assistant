@@ -8,10 +8,12 @@ from agents import (
     answer_questions,
     critique_report,
     plan_questions,
+    quick_critique,
     read_sources,
     search_for_questions,
     write_report,
 )
+from text_clean import sanitize_report_markdown
 from llm import ResearchLLM
 from tools import SearchHit, ScrapedPage, format_hits, format_pages
 
@@ -35,6 +37,7 @@ class ResearchState(TypedDict, total=False):
     model: str
     used_llm: bool
     status: str
+    fast_mode: bool
 
 
 def _log(state: ResearchState, message: str) -> list[str]:
@@ -58,7 +61,7 @@ def _merge(state: ResearchState, patch: ResearchState) -> ResearchState:
 
 def _planner(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None) -> ResearchState:
     logs = _emit(progress, 10, "Planner Agent: designing research questions", state)
-    questions = plan_questions(state["topic"], llm)
+    questions = plan_questions(state["topic"], llm, use_llm=not state.get("fast_mode", True))
     logs = _log({**state, "logs": logs}, f"Planner Agent: {len(questions)} questions")
     return _merge(state, {"questions": questions, "logs": logs, "model": llm.model_name, "used_llm": llm.available})
 
@@ -101,7 +104,7 @@ def _reader(state: ResearchState, progress: ProgressCb | None) -> ResearchState:
     if not ok_pages and hits:
         ok_pages = [
             ScrapedPage(url=hit.url, title=hit.title, text=hit.snippet, ok=True, error="snippet-fallback")
-            for hit in hits[:5]
+            for hit in hits[:3]
             if hit.snippet
         ]
         pages = ok_pages
@@ -135,8 +138,18 @@ def _writer(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
     hits = [SearchHit(**item) for item in state.get("search_hits") or []]
     pages = [ScrapedPage(**item) for item in state.get("scraped_pages") or []]
     questions = state.get("questions") or []
-    answers = answer_questions(state["topic"], questions, hits, pages, llm)
-    report = write_report(state["topic"], questions, answers, hits, pages, llm)
+    use_llm = not state.get("fast_mode", True)
+    answers = answer_questions(
+        state["topic"], questions, hits, pages, llm, use_llm=use_llm
+    )
+    if use_llm:
+        report = write_report(state["topic"], questions, answers, hits, pages, llm)
+    else:
+        from agents import _extractive_report, _references
+
+        report = _extractive_report(
+            state["topic"], answers, _references(hits, pages)
+        )
     if not (report or "").strip():
         errors = list(state.get("errors") or [])
         errors.append("Writer Agent produced an empty report.")
@@ -150,13 +163,24 @@ def _writer(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None)
 
 def _critic(state: ResearchState, llm: ResearchLLM, progress: ProgressCb | None) -> ResearchState:
     logs = _emit(progress, 90, "Critic Agent: reviewing the report", state)
-    feedback = critique_report(state["topic"], state.get("report") or "", state.get("answers") or [], llm)
+    hits = [SearchHit(**item) for item in state.get("search_hits") or []]
+    if state.get("fast_mode", True):
+        feedback = quick_critique(state["topic"], state.get("answers") or [], hits)
+    else:
+        feedback = critique_report(
+            state["topic"], state.get("report") or "", state.get("answers") or [], llm
+        )
     logs = _log({**state, "logs": logs}, "Critic Agent: review complete")
     _emit(progress, 100, "Pipeline complete", {**state, "logs": logs})
     return _merge(state, {"feedback": feedback, "logs": logs, "status": "completed", "model": llm.model_name})
 
 
-def run_research_pipeline(topic: str, progress: ProgressCb | None = None) -> dict[str, Any]:
+def run_research_pipeline(
+    topic: str,
+    progress: ProgressCb | None = None,
+    *,
+    fast_mode: bool = True,
+) -> dict[str, Any]:
     topic = (topic or "").strip()
     if not topic:
         return {
@@ -175,6 +199,7 @@ def run_research_pipeline(topic: str, progress: ProgressCb | None = None) -> dic
         "logs": [],
         "errors": [],
         "status": "running",
+        "fast_mode": fast_mode,
         "search_results": "No search results available.",
         "scraped_content": "No scraped content available.",
     }
@@ -205,6 +230,10 @@ def run_research_pipeline(topic: str, progress: ProgressCb | None = None) -> dic
             state.setdefault("errors", []).append("Pipeline produced no search hits.")
         else:
             state["status"] = "completed"
+
+    report = state.get("report")
+    if report:
+        state["report"] = sanitize_report_markdown(report)
 
     if state.get("status") == "completed":
         filename = topic.replace(" ", "_") + "_report.txt"
